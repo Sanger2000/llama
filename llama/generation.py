@@ -7,6 +7,7 @@ import torch
 
 from llama.tokenizer import Tokenizer
 from llama.model import Transformer
+import time
 
 
 class LLaMA:
@@ -38,21 +39,34 @@ class LLaMA:
         input_text_mask = tokens != self.tokenizer.pad_id
         start_pos = min_prompt_size
         prev_pos = 0
+
+        start = time.time()
+        is_first = True
+        num_tokens = 0
         for cur_pos in range(start_pos, total_len):
             logits = self.model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
+            num_tokens += 1
+            if is_first:
+                print('time to first token', time.time() - start, 'num tokens', cur_pos - prev_pos)
+                is_first = False
+                start = time.time()
             if temperature > 0:
                 probs = torch.softmax(logits / temperature, dim=-1)
                 next_token = sample_top_p(probs, top_p)
             else:
                 next_token = torch.argmax(logits, dim=-1)
             next_token = next_token.reshape(-1)
+            #print(self.tokenizer.decode([next_token[0]]))
             # only replace token if prompt has already been generated
             next_token = torch.where(
                 input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
             )
+            raw_token = int(next_token[0])
+            #print(self.tokenizer.decode([raw_token]), end=' ')
             tokens[:, cur_pos] = next_token
             prev_pos = cur_pos
 
+        print('time to finish', time.time() - start, 'num_tokens', num_tokens)
         decoded = []
         for i, t in enumerate(tokens.tolist()):
             # cut to max gen len

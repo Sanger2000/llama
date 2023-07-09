@@ -8,6 +8,7 @@ import torch
 import fire
 import time
 import json
+from long_prompt import prompt
 
 from pathlib import Path
 
@@ -60,60 +61,83 @@ def load(
 
     generator = LLaMA(model, tokenizer)
     print(f"Loaded in {time.time() - start_time:.2f} seconds")
-    return generator
+    return generator, tokenizer
 
 
 def main(
+    generator,
+    tokenizer,
     ckpt_dir: str,
     tokenizer_path: str,
-    temperature: float = 0.8,
-    top_p: float = 0.95,
-    max_seq_len: int = 512,
+    temperature: float = 0.2,
+    top_p: float = 1,
+    prompt_len: int = 512,
     max_batch_size: int = 32,
+    max_gen_len: int = 256,
 ):
+
+    raw_tokens = tokenizer.encode(prompt, bos=False, eos=False)[:prompt_len]
+    new_prompt = tokenizer.decode(raw_tokens)
+
+    prompts = [
+        new_prompt for _ in range(max_batch_size)
+    ]
+    results = generator.generate(
+        prompts, max_gen_len=max_gen_len, temperature=temperature, top_p=top_p
+    )
+
+    for result in results:
+        #print(result)
+        #print("\n==================================\n")
+        pass
+
+def other_main(
+    ckpt_dir: str,
+    tokenizer_path: str,
+    temperature: float = 0.2,
+    top_p: float = 1,
+    prompt_len: int = 512,
+    max_gen_len: int = 256,
+    ):
+
+    max_seq_len = prompt_len + max_gen_len + 5
     local_rank, world_size = setup_model_parallel()
     if local_rank > 0:
         sys.stdout = open(os.devnull, "w")
 
-    generator = load(
+    # calculate the actual max batch size:
+    highest_possible = 170 * 1000 / (max_seq_len * 2.6)
+    for possible_size in range(0, int(highest_possible), 16):
+        if possible_size > highest_possible:
+            break
+        else:
+            max_batch_size = possible_size
+
+    #max_batch_size = 24
+
+    print('max batch size', max_batch_size)
+    generator, tokenizer = load(
         ckpt_dir, tokenizer_path, local_rank, world_size, max_seq_len, max_batch_size
     )
+    for i in (4, 4, 1, 4, 8, 16, 24, 32, 48, 64, 80, 96, 112, 128):
+        if i > max_batch_size:
+            break
+        # We warmup initially
+        print('batch size', i)
+        main(
+        generator,
+        tokenizer,
+        ckpt_dir,
+        tokenizer_path,
+        temperature,
+        top_p,
+        prompt_len,
+        i,
+        max_gen_len,
+        )
 
-    prompts = [
-        # For these prompts, the expected answer is the natural continuation of the prompt
-        "I believe the meaning of life is",
-        "Simply put, the theory of relativity states that ",
-        "Building a website can be done in 10 simple steps:\n",
-        # Few shot prompts: https://huggingface.co/blog/few-shot-learning-gpt-neo-and-inference-api
-        """Tweet: "I hate it when my phone battery dies."
-Sentiment: Negative
-###
-Tweet: "My day has been 👍"
-Sentiment: Positive
-###
-Tweet: "This is the link to the article"
-Sentiment: Neutral
-###
-Tweet: "This new music video was incredibile"
-Sentiment:""",
-        """Translate English to French:
-
-sea otter => loutre de mer
-
-peppermint => menthe poivrée
-
-plush girafe => girafe peluche
-
-cheese =>""",
-    ]
-    results = generator.generate(
-        prompts, max_gen_len=256, temperature=temperature, top_p=top_p
-    )
-
-    for result in results:
-        print(result)
-        print("\n==================================\n")
 
 
 if __name__ == "__main__":
-    fire.Fire(main)
+    #fire.Fire(main)
+    fire.Fire(other_main)
